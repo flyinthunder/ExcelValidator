@@ -1,5 +1,7 @@
 import re
-from openpyxl import load_workbook
+from openpyxl import Workbook
+from openpyxl.utils.dataframe import dataframe_to_rows
+import pandas as pd
 
 
 class ValidateQuestionnaire:
@@ -9,10 +11,26 @@ class ValidateQuestionnaire:
         if Filled_Questionnaire is None:
             raise ValueError("Filled Questionnaire cannot be Null.")
 
-        self.template = Template
-        self.filled_questionnaire = Filled_Questionnaire
-        self.template_sheet = self.template.active
-        self.filled_questionnaire_sheet = self.filled_questionnaire.active
+        
+        Template_WB = Workbook()
+        Template_WS = Template_WB.active
+        Template_WB.title = "Sheet 1"
+        for row in dataframe_to_rows(Template.where(Template.notnull(), None), index=False, header=True):
+            Template_WS.append(row)
+
+        Filled_Questionnaire_WB = Workbook()
+        Filled_Questionnaire_WS = Filled_Questionnaire_WB.active
+        Filled_Questionnaire_WB.title = "Sheet 1"
+        for row in dataframe_to_rows(Filled_Questionnaire.where(Filled_Questionnaire.notnull(), None), index=False, header=True):
+            Filled_Questionnaire_WS.append(row)
+
+
+        self.template = Template_WB
+        self.filled_questionnaire = Filled_Questionnaire_WB
+        self.template_sheet = Template_WS
+        self.filled_questionnaire_sheet = Filled_Questionnaire_WS
+
+        self.not_applicable = ("", "na", "n/a", "not applicable")
 
         self.template_headers = None
         self.filled_questionnaire_headers = None
@@ -88,6 +106,11 @@ class ValidateQuestionnaire:
             value = self.filled_questionnaire_sheet.cell(row=row, column=self.filled_questionnaire_answers_column).value
             validation = self.parse_validators(self.template_sheet.cell(row=row, column=self.template_validation_colum).value)
 
+            if value is None and "NULL" not in validation:
+                msg = "Value cannot be left empty. If this answer is not required, kindly put 'N/A' instead."
+                self.validation_errors.append(f"Row {row}: {msg}")
+                continue
+
             for vtype, arg in validation:
 
                 if vtype == "TEXT":
@@ -112,6 +135,9 @@ class ValidateQuestionnaire:
                     self.pick_groups.setdefault(tuple(arg), []).append((row, value))
                     ok, msg = True, None
 
+                elif vtype == "NULL":
+                    ok, msg = self.is_null(value)
+
                 else:
                     ok, msg = False, f"Unknown validation: {vtype}"
 
@@ -129,17 +155,15 @@ class ValidateQuestionnaire:
             print("✅ Validation Successful.")
 
     def is_text(self, value):
-        if not isinstance(value, str):
-            return False, "Must be text"
-        if not re.match(r"^(?=.*[a-zA-Z])[\x20-\x7E\s]*$", value):
-            return False, "Text conditions not satisfied. Text must contain atleast 1 letter. If not required, " \
-                          "write N/A."
+        if not re.match(r"^(?=.*[a-zA-Z])[\x20-\x7E\s]*$", str(value)):
+            return False, "Text conditions not satisfied. Text must contain atleast 1 letter. " \
+            "Text cannot contain any non keyboard special characters." \
+            " If not required, write N/A."
         return True, None
 
     def is_number(self, value):
         try:
-            regex = r"^[na/-]+$"
-            if re.fullmatch(regex, str(value)):
+            if str(value).strip().lower() in self.not_applicable:
                 return True, None
             elif float(value) >= 0:
                 return True, None
@@ -150,10 +174,8 @@ class ValidateQuestionnaire:
 
     def is_negetive_number(self, value):
         try:
-            regex = r"^[na/-]+$"
-            if re.fullmatch(regex, str(value)):
+            if str(value).strip().lower() in self.not_applicable:
                 return True, None
-
             val = float(value)
             return True, None
         except:
@@ -162,7 +184,9 @@ class ValidateQuestionnaire:
     def is_yes_no(self, value):
         if not isinstance(value, str):
             return False, "Must be Yes or No"
-        if value.strip().lower() in ["yes", "no", "na", "n/a", "not applicable"]:
+        if str(value).strip().lower() in self.not_applicable:
+            return True, None
+        elif str(value).strip().lower() in ("yes", "no", "y", "n"):
             return True, None
         return False, "Value must be Yes or No. If not required, write N/A."
 
@@ -179,20 +203,26 @@ class ValidateQuestionnaire:
         return False, "Regex match failed. Contact cloud team for help."
 
     def is_pick(self):
-        print(self.pick_groups)
         for k, values in enumerate(self.pick_groups.keys()):
             groups = self.pick_groups[values]
-            print(groups)
-            if len([v for v in groups if str(v).lower() not in ("n/a", "na", "not appliable")]) != 1:
+            if len([v[1] for v in groups if str(v[1]).strip().lower() not in self.not_applicable]) != 1:
                 self.validation_errors.append(f"PICK one from {values}: exactly ONE of the questions on these rows must be answered. Rest should be 'N/A'")
+
+    def is_null(self, value):
+        if value is None or str(value).strip().lower() in self.not_applicable:
+            return True, None
+        else:
+            return False, "This answer must be left empty."
 
 
 def main():
-    TEMPLATE = "Questionnaire_Template.xlsx"  # Variables for testing.
-    SUBMISSION = "Submission.xlsx"
+    TEMPLATE = "D:\\GitHub\\ExcelValidator\\ExcelValidator\\Excel Validator\\Questionnaire_Template.xlsx"  # Variables for testing.
+    SUBMISSION = "D:\\GitHub\\ExcelValidator\\ExcelValidator\\Excel Validator\\Submission1.xlsx"
 
-    template_workbook = load_workbook(TEMPLATE)  # Loading of workbook needs to be done before class object creation.
-    submission_workbook = load_workbook(SUBMISSION)
+    #template_workbook = load_workbook(TEMPLATE)  # Loading of workbook needs to be done before class object creation.
+    #submission_workbook = load_workbook(SUBMISSION)
+    template_workbook = pd.read_excel(TEMPLATE, sheet_name=0, engine="openpyxl", keep_default_na=False)
+    submission_workbook = pd.read_excel(SUBMISSION, sheet_name=0, engine="openpyxl", keep_default_na=False)
 
     validator = ValidateQuestionnaire(template_workbook, submission_workbook)
 
